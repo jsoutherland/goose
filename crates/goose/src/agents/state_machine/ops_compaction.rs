@@ -13,7 +13,7 @@ use crate::agents::state_machine::operation::{
 use crate::agents::state_machine::ops_llm::{chat_span, record_chat_usage};
 use crate::context_mgmt::compact_messages;
 use crate::conversation::message::{Message, MessageErrorKind, SystemNotificationType};
-use crate::conversation::{Conversation, EffectiveRole};
+use crate::conversation::Conversation;
 use crate::providers::base::Provider;
 use crate::session::Session;
 use goose_providers::model::ModelConfig;
@@ -232,9 +232,6 @@ impl Operation for CompactionOperation {
                 return not_applicable();
             }
         } else {
-            if last_effective_role(messages)? != EffectiveRole::User {
-                return not_applicable();
-            }
             match session.usage.total_tokens {
                 Some(tokens) if tokens > 0 && self.over_threshold(tokens as usize) => {}
                 _ => return not_applicable(),

@@ -2392,6 +2392,67 @@ impl Agent {
                     break;
                 }
 
+                if turns_taken > 1 {
+                    let updated_session = session_manager.get_session(&session_config.id, true).await?;
+                    if check_if_compaction_needed(
+                        self.provider().await?.as_ref(),
+                        &conversation,
+                        None,
+                        &updated_session,
+                    ).await? {
+                        let threshold = Config::global()
+                            .get_param::<f64>("GOOSE_AUTO_COMPACT_THRESHOLD")
+                            .unwrap_or(DEFAULT_COMPACTION_THRESHOLD);
+                        let threshold_percentage = (threshold * 100.0) as u32;
+                        yield AgentEvent::Message(
+                            Message::assistant().with_system_notification(
+                                SystemNotificationType::InlineMessage,
+                                format!(
+                                    "Exceeded auto-compact threshold of {}%. Performing auto-compaction...",
+                                    threshold_percentage
+                                ),
+                            )
+                        );
+                        yield AgentEvent::Message(
+                            Message::assistant().with_system_notification(
+                                SystemNotificationType::ProgressMessage,
+                                COMPACTION_PROGRESS_TEXT,
+                            )
+                        );
+                        let compact_model_config = self.model_config_for_session(&session_config.id).await?;
+                        match compact_messages(
+                            self.provider().await?.as_ref(),
+                            &compact_model_config,
+                            &session_config.id,
+                            &conversation,
+                            false,
+                        ).await {
+                            Ok(compaction) => {
+                                session_manager.replace_conversation(&session_config.id, &compaction.conversation).await?;
+                                self.update_session_metrics(&session_config.id, session_config.schedule_id.clone(), &compaction.usage, Some(compaction.retained_context_tokens)).await?;
+                                yield AgentEvent::HistoryReplaced(compaction.conversation.clone());
+                                yield AgentEvent::Message(
+                                    Message::assistant().with_system_notification(
+                                        SystemNotificationType::InlineMessage,
+                                        "Compaction complete",
+                                    )
+                                );
+                                conversation = compaction.conversation;
+                            }
+                            Err(e) => {
+                                #[cfg(feature = "telemetry")]
+                                crate::posthog::emit_error("compaction_failed", &e.to_string());
+                                yield AgentEvent::Message(
+                                    Message::assistant().with_text(
+                                        format!("Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session")
+                                    )
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 let mut stream = crate::agents::reply_parts::stream_response_from_provider(
                     self.provider().await?,
                     model_config.clone(),
