@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tracing_futures::Instrument;
 
 use crate::agents::state_machine::operation::{
-    applied, last_effective_role, messages_since_kickoff, not_applicable, trailing_error, yielded,
+    applied, messages_since_kickoff, not_applicable, trailing_error, yielded,
     yielded_with, Emitter, Operation, OperationResult, SlashCommand, StateEffect,
 };
 use crate::agents::state_machine::ops_llm::{chat_span, record_chat_usage};
