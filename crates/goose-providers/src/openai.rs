@@ -276,6 +276,7 @@ impl OpenAiProviderBuilder {
     }
 
     pub fn build(self) -> OpenAiProvider {
+        crate::debug_log::log(&format!("[openai.rs] build() name={}", self.name));
         OpenAiProvider {
             api_client: self.api_client,
             base_path: self.base_path,
@@ -375,6 +376,7 @@ impl OpenAiProvider {
 
     #[doc(hidden)]
     pub fn new(api_client: ApiClient) -> Self {
+        crate::debug_log::log("[openai.rs] OpenAiProvider::new()");
         Self {
             api_client,
             base_path: OPEN_AI_DEFAULT_BASE_PATH.to_string(),

@@ -14,6 +14,7 @@ pub mod http_status;
 #[cfg(feature = "local-inference")]
 pub mod local_inference;
 pub mod ollama;
+pub mod debug_log;
 pub mod openai;
 pub mod openai_compatible;
 

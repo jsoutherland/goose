@@ -39,6 +39,7 @@ pub struct OpenAiCompatibleProvider {
 
 impl OpenAiCompatibleProvider {
     pub fn new(name: String, api_client: ApiClient, completions_prefix: String) -> Self {
+        crate::debug_log::log(&format!("[openai_compatible.rs] new() name={name}"));
         Self {
             name,
             api_client,
@@ -48,6 +49,7 @@ impl OpenAiCompatibleProvider {
     }
 
     pub fn with_supports_streaming(mut self, supports_streaming: bool) -> Self {
+        crate::debug_log::log(&format!("[openai_compatible.rs] with_supports_streaming() name={} supports_streaming={supports_streaming}", self.name));
         self.supports_streaming = supports_streaming;
         self
     }
@@ -125,6 +127,7 @@ impl OpenAiCompatibleProvider {
             .inspect_err(|e| {
                 let _ = log.error(e);
             })?;
+        crate::debug_log::log(&format!("[openai_compatible.rs] stream_payload() supports_streaming={}", self.supports_streaming));
         if self.supports_streaming {
             stream_openai_compat(response, log)
         } else {
