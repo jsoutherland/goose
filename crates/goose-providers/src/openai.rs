@@ -794,6 +794,7 @@ impl Provider for OpenAiProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<MessageStream, ProviderError> {
+        // 
         if self.should_use_responses_api_for_provider(&model_config.model_name) {
             let (wire_model, _) =
                 crate::formats::openai::extract_reasoning_effort(&model_config.model_name);
@@ -850,7 +851,8 @@ impl Provider for OpenAiProvider {
                 })?;
 
             if self.supports_streaming {
-                stream_openai_compat(response, log)
+                crate::debug_log::log(&format!("[openai.rs] model_config={model_config:?}"));
+                stream_openai_compat(response, log, Some(20_000)) // FIXME: Some(model_config.context_limit()))
             } else {
                 let json: serde_json::Value = read_json_response(response).await?;
 

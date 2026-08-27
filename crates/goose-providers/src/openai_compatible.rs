@@ -92,6 +92,7 @@ impl OpenAiCompatibleProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<MessageStream, ProviderError> {
+        crate::debug_log::log("[openai_compatible.rs] stream_for_model()");
         let payload = self.build_request_for_model(
             model_config,
             wire_model,
@@ -129,7 +130,7 @@ impl OpenAiCompatibleProvider {
             })?;
         crate::debug_log::log(&format!("[openai_compatible.rs] stream_payload() supports_streaming={}", self.supports_streaming));
         if self.supports_streaming {
-            stream_openai_compat(response, log)
+            stream_openai_compat(response, log, Some(model_config.context_limit()))
         } else {
             let json = read_json_response(response).await?;
             let message = response_to_message(&json).map_err(|e| {
@@ -158,6 +159,8 @@ impl OpenAiCompatibleProvider {
         tools: &[Tool],
         for_streaming: bool,
     ) -> Result<Value, ProviderError> {
+        crate::debug_log::log("[openai_compatible.rs] build_request()");
+
         create_request(
             model_config,
             system,
@@ -240,7 +243,9 @@ pub use super::http_status::handle_response as handle_response_openai_compat;
 pub fn stream_openai_compat(
     response: Response,
     mut log: Option<Box<dyn RequestLogHandle>>,
+    context_limit: Option<usize>,
 ) -> Result<MessageStream, ProviderError> {
+    crate::debug_log::log("[openai_compatible.rs] stream_openai_compat()");
     let stream = response.bytes_stream().map_err(std::io::Error::other);
 
     Ok(Box::pin(try_stream! {
@@ -250,11 +255,32 @@ pub fn stream_openai_compat(
 
         let message_stream = response_to_streaming_message(framed);
         pin!(message_stream);
+        let mut last_total_tokens: Option<i32> = None;
         while let Some(message) = message_stream.next().await {
             let (message, usage) = message.map_err(|e|
                 e.downcast::<ProviderError>()
                     .unwrap_or_else(ProviderError::stream_decode_error)
             )?;
+ 
+            let is_limit_marker = message.as_ref().is_some_and(|m| m.metadata.output_token_limit_reached);
+            
+            let total = usage.as_ref().and_then(|u| u.usage.total_tokens);
+            if let Some(t) = total {
+                last_total_tokens = Some(t);
+            }
+
+            if let Some(limit) = context_limit {
+                // usage and is_limit_marker arrive on separate iterations; use last_total_tokens as fallback
+                let effective_total = total.or(if is_limit_marker { last_total_tokens } else { None });
+                if is_limit_marker && effective_total.is_some_and(|t| t as usize >= limit) {
+                    let t = effective_total.unwrap();
+                    crate::debug_log::log("!!! Hit the error !!!");
+                    Err(ProviderError::ContextLengthExceeded(format!(
+                        "Context limit reached: used {} of {} tokens",
+                        t, limit
+                    )))?;
+                }
+            }
             log.write(&message, usage.as_ref().map(|f| f.usage).as_ref())?;
             yield (message, usage);
         }
@@ -266,6 +292,7 @@ pub fn stream_responses_compat(
     mut log: Option<Box<dyn RequestLogHandle>>,
 ) -> Result<MessageStream, ProviderError> {
     let stream = response.bytes_stream().map_err(std::io::Error::other);
+    crate::debug_log::log("[openai_compatible.rs] stream_responses_compat()");
 
     Ok(Box::pin(try_stream! {
         let stream_reader = StreamReader::new(stream);
@@ -454,5 +481,90 @@ mod tests {
             err.to_string().contains("response body exceeds"),
             "got: {err}"
         );
+    }
+
+    /// Helpers for streaming tests
+    fn make_streaming_provider(server_uri: String) -> OpenAiCompatibleProvider {
+        OpenAiCompatibleProvider::new(
+            "test".to_string(),
+            ApiClient::new_with_tls(server_uri, crate::api_client::AuthMethod::NoAuth, None)
+                .unwrap(),
+            String::new(),
+        )
+    }
+    fn length_finish_sse(total_tokens: u64) -> String {
+        format!(
+            "data: {{\"model\":\"test-model\",\"choices\":[{{\"delta\":{{\"content\":\"partial\"}},\"finish_reason\":null,\"index\":0}}],\"id\":\"test-id\"}}\n\
+             data: {{\"model\":\"test-model\",\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"length\",\"index\":0}}],\"usage\":{{\"prompt_tokens\":90,\"completion_tokens\":{ct},\"total_tokens\":{total}}},\"id\":\"test-id\"}}\n\
+             data: [DONE]\n",
+            ct = total_tokens.saturating_sub(90),
+            total = total_tokens,
+        )
+    }
+    #[tokio::test]
+    async fn streaming_length_at_context_limit_raises_context_length_exceeded() {
+        use tokio_stream::StreamExt;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(length_finish_sse(100)),
+            )
+            .mount(&server)
+            .await;
+        let mut model = ModelConfig::new("test-model");
+        model.context_limit = Some(100);
+        let mut stream = make_streaming_provider(server.uri())
+            .stream(&model, "", &[], &[])
+            .await
+            .expect("stream setup should succeed");
+        let mut got_error = false;
+        while let Some(item) = stream.next().await {
+            match item {
+                Err(ProviderError::ContextLengthExceeded(_)) => {
+                    got_error = true;
+                    break;
+                }
+                Err(e) => panic!("unexpected error: {e}"),
+                Ok(_) => {}
+            }
+        }
+        assert!(got_error, "expected ContextLengthExceeded error");
+    }
+    #[tokio::test]
+    async fn streaming_length_under_context_limit_yields_output_token_limit_marker() {
+        use tokio_stream::StreamExt;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(length_finish_sse(100)),
+            )
+            .mount(&server)
+            .await;
+        let mut model = ModelConfig::new("test-model");
+        model.context_limit = Some(200);
+        let mut stream = make_streaming_provider(server.uri())
+            .stream(&model, "", &[], &[])
+            .await
+            .expect("stream setup should succeed");
+        let mut got_marker = false;
+        while let Some(item) = stream.next().await {
+            let (msg, _usage) = item.expect("no error expected");
+            if let Some(m) = msg {
+                if m.metadata.output_token_limit_reached {
+                    got_marker = true;
+                }
+            }
+        }
+        assert!(got_marker, "expected output_token_limit_reached marker");
     }
 }
