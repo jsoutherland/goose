@@ -276,7 +276,6 @@ impl OpenAiProviderBuilder {
     }
 
     pub fn build(self) -> OpenAiProvider {
-        crate::debug_log::log(&format!("[openai.rs] build() name={}", self.name));
         OpenAiProvider {
             api_client: self.api_client,
             base_path: self.base_path,
@@ -376,7 +375,6 @@ impl OpenAiProvider {
 
     #[doc(hidden)]
     pub fn new(api_client: ApiClient) -> Self {
-        crate::debug_log::log("[openai.rs] OpenAiProvider::new()");
         Self {
             api_client,
             base_path: OPEN_AI_DEFAULT_BASE_PATH.to_string(),
@@ -794,7 +792,6 @@ impl Provider for OpenAiProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<MessageStream, ProviderError> {
-        // 
         if self.should_use_responses_api_for_provider(&model_config.model_name) {
             let (wire_model, _) =
                 crate::formats::openai::extract_reasoning_effort(&model_config.model_name);
@@ -851,7 +848,6 @@ impl Provider for OpenAiProvider {
                 })?;
 
             if self.supports_streaming {
-                crate::debug_log::log(&format!("[openai.rs] model_config={model_config:?}"));
                 stream_openai_compat(response, log, Some(20_000)) // FIXME: Some(model_config.context_limit()))
             } else {
                 let json: serde_json::Value = read_json_response(response).await?;

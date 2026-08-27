@@ -719,8 +719,6 @@ pub fn record_response_metadata(usage: &mut ProviderUsage, response: &Value) {
 
 /// Convert OpenAI's API response to internal Message format
 pub fn response_to_message(response: &Value) -> anyhow::Result<Message> {
-    crate::debug_log::log("[formats/openai.rs] response_to_message()");
-
     let output_token_limit_reached = response
         .pointer("/choices/0/finish_reason")
         .and_then(Value::as_str)
@@ -1139,70 +1137,6 @@ fn stream_error_text(value: &Value) -> Option<String> {
     Some(text)
 }
 
-/// Convert an error message string into the appropriate `ProviderError` variant.
-///
-/// Returns `ContextLengthExceeded` when the message indicates a context/token limit
-/// was hit; otherwise returns `ServerError`.
-fn provider_error_from_message(message: String) -> ProviderError {
-    if is_context_length_exceeded_message(&message) {
-        ProviderError::ContextLengthExceeded(message)
-    } else {
-        ProviderError::ServerError(message)
-    }
-}
-
-fn is_context_length_exceeded_message(text: &str) -> bool {
-    let text_lower = text.to_lowercase();
-
-    let direct_phrases = [
-        "context length",
-        "context_length_exceeded",
-        "context window",
-        "context_window_exceeded",
-        "context limit",
-        "maximum context",
-        "max context",
-        "maximum prompt length",
-        "max prompt length",
-        "does not fit in context",
-    ];
-    if direct_phrases
-        .iter()
-        .any(|phrase| text_lower.contains(phrase))
-    {
-        return true;
-    }
-
-    let mentions_prompt_input_tokens = [
-        "input token",
-        "input length",
-        "prompt token",
-        "prompt length",
-        "message token",
-        "messages token",
-        "request token",
-        "total token",
-    ]
-    .iter()
-    .any(|phrase| text_lower.contains(phrase));
-    let mentions_limit = [
-        "model limit",
-        "model's limit",
-        "maximum allowed",
-        "max allowed",
-        "maximum number of tokens",
-        "token limit",
-        "tokens limit",
-    ]
-    .iter()
-    .any(|phrase| text_lower.contains(phrase));
-    let mentions_overflow = ["exceed", "too long", "too large", "over the limit"]
-        .iter()
-        .any(|phrase| text_lower.contains(phrase));
-
-    mentions_prompt_input_tokens && mentions_limit && mentions_overflow
-}
-
 /// Decide whether a choice-less SSE frame reports an in-stream failure.
 ///
 /// Returns `Some(err)` when it does, `None` when it is gateway metadata that can be skipped.
@@ -1238,7 +1172,7 @@ fn classify_choiceless_frame(value: &Value) -> Option<ProviderError> {
             Some(s) => format!("Gateway returned status {s} mid-stream"),
             None => "Unknown server error".to_string(),
         });
-    Some(provider_error_from_message(details))
+    Some(ProviderError::ServerError(details))
 }
 
 /// Parse one SSE `data:` payload.
@@ -1266,7 +1200,7 @@ fn parse_streaming_chunk(line: &str) -> Result<Option<StreamingChunk>, ProviderE
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("Unknown server error");
-        return Err(provider_error_from_message(message.to_string()));
+        return Err(ProviderError::ServerError(message.to_string()));
     }
 
     if value.get("object").and_then(|o| o.as_str()) == Some("error") {
@@ -1274,7 +1208,7 @@ fn parse_streaming_chunk(line: &str) -> Result<Option<StreamingChunk>, ProviderE
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("Unknown server error");
-        return Err(provider_error_from_message(message.to_string()));
+        return Err(ProviderError::ServerError(message.to_string()));
     }
 
     if value
@@ -1309,7 +1243,6 @@ pub fn response_to_streaming_message<S>(
 where
     S: Stream<Item = anyhow::Result<String>> + Unpin + Send + 'static,
 {
-    crate::debug_log::log("[formats/openai.rs] response_to_streaming_message()");
     try_stream! {
         use futures::StreamExt;
 

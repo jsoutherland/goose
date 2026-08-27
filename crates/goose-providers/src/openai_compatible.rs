@@ -39,7 +39,6 @@ pub struct OpenAiCompatibleProvider {
 
 impl OpenAiCompatibleProvider {
     pub fn new(name: String, api_client: ApiClient, completions_prefix: String) -> Self {
-        crate::debug_log::log(&format!("[openai_compatible.rs] new() name={name}"));
         Self {
             name,
             api_client,
@@ -49,7 +48,6 @@ impl OpenAiCompatibleProvider {
     }
 
     pub fn with_supports_streaming(mut self, supports_streaming: bool) -> Self {
-        crate::debug_log::log(&format!("[openai_compatible.rs] with_supports_streaming() name={} supports_streaming={supports_streaming}", self.name));
         self.supports_streaming = supports_streaming;
         self
     }
@@ -92,7 +90,6 @@ impl OpenAiCompatibleProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<MessageStream, ProviderError> {
-        crate::debug_log::log("[openai_compatible.rs] stream_for_model()");
         let payload = self.build_request_for_model(
             model_config,
             wire_model,
@@ -128,7 +125,6 @@ impl OpenAiCompatibleProvider {
             .inspect_err(|e| {
                 let _ = log.error(e);
             })?;
-        crate::debug_log::log(&format!("[openai_compatible.rs] stream_payload() supports_streaming={}", self.supports_streaming));
         if self.supports_streaming {
             stream_openai_compat(response, log, Some(model_config.context_limit()))
         } else {
@@ -159,8 +155,6 @@ impl OpenAiCompatibleProvider {
         tools: &[Tool],
         for_streaming: bool,
     ) -> Result<Value, ProviderError> {
-        crate::debug_log::log("[openai_compatible.rs] build_request()");
-
         create_request(
             model_config,
             system,
@@ -245,7 +239,6 @@ pub fn stream_openai_compat(
     mut log: Option<Box<dyn RequestLogHandle>>,
     context_limit: Option<usize>,
 ) -> Result<MessageStream, ProviderError> {
-    crate::debug_log::log("[openai_compatible.rs] stream_openai_compat()");
     let stream = response.bytes_stream().map_err(std::io::Error::other);
 
     Ok(Box::pin(try_stream! {
@@ -261,9 +254,9 @@ pub fn stream_openai_compat(
                 e.downcast::<ProviderError>()
                     .unwrap_or_else(ProviderError::stream_decode_error)
             )?;
- 
+
             let is_limit_marker = message.as_ref().is_some_and(|m| m.metadata.output_token_limit_reached);
-            
+
             let total = usage.as_ref().and_then(|u| u.usage.total_tokens);
             if let Some(t) = total {
                 last_total_tokens = Some(t);
@@ -274,7 +267,6 @@ pub fn stream_openai_compat(
                 let effective_total = total.or(if is_limit_marker { last_total_tokens } else { None });
                 if is_limit_marker && effective_total.is_some_and(|t| t as usize >= limit) {
                     let t = effective_total.unwrap();
-                    crate::debug_log::log("!!! Hit the error !!!");
                     Err(ProviderError::ContextLengthExceeded(format!(
                         "Context limit reached: used {} of {} tokens",
                         t, limit
@@ -292,7 +284,6 @@ pub fn stream_responses_compat(
     mut log: Option<Box<dyn RequestLogHandle>>,
 ) -> Result<MessageStream, ProviderError> {
     let stream = response.bytes_stream().map_err(std::io::Error::other);
-    crate::debug_log::log("[openai_compatible.rs] stream_responses_compat()");
 
     Ok(Box::pin(try_stream! {
         let stream_reader = StreamReader::new(stream);

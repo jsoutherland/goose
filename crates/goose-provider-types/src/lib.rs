@@ -1,6 +1,5 @@
 pub mod base;
 pub mod cache_semantics;
-pub mod debug_log;
 pub mod canonical;
 pub mod context_limit;
 pub mod conversation;
